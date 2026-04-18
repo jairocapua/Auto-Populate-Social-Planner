@@ -6,6 +6,7 @@ export interface PlatformConfig {
   color: string
   charLimit: number
   defaultHour: number
+  logoUrl: string
 }
 
 export interface UploadedFile {

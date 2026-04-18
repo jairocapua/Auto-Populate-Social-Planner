@@ -1,4 +1,4 @@
-import type { CaptionData } from '../../types'
+import type { CaptionData, UploadedFile } from '../../types'
 import { PLATFORMS, PLATFORM_MAP } from '../../constants/platforms'
 import CaptionCard from './CaptionCard'
 import Spinner from '../ui/Spinner'
@@ -6,6 +6,7 @@ import Spinner from '../ui/Spinner'
 interface CaptionCardGridProps {
   captions: CaptionData[]
   isGenerating: boolean
+  files: UploadedFile[]
   onCaptionChange: (index: number, caption: string) => void
   onDateChange: (index: number, date: string) => void
   onSchedule: (index: number) => void
@@ -14,13 +15,15 @@ interface CaptionCardGridProps {
 export default function CaptionCardGrid({
   captions,
   isGenerating,
+  files,
   onCaptionChange,
   onDateChange,
   onSchedule,
 }: CaptionCardGridProps) {
+  const imagePreview = files.find((f) => !f.isVideo)?.preview
   if (isGenerating) {
     return (
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {PLATFORMS.map((p) => (
           <div
             key={p.id}
@@ -55,6 +58,7 @@ export default function CaptionCardGrid({
             data={caption}
             config={config}
             animationDelay={index * 70}
+            imagePreview={imagePreview}
             onCaptionChange={(text) => onCaptionChange(index, text)}
             onDateChange={(date) => onDateChange(index, date)}
             onSchedule={() => onSchedule(index)}

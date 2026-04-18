@@ -13,7 +13,7 @@ export default function ThumbnailGrid({ files, onRemove }: ThumbnailGridProps) {
       {files.map((file) => (
         <div
           key={file.id}
-          className="relative shrink-0 w-24 h-24 rounded-lg overflow-hidden bg-surface-light border border-border group"
+          className="relative shrink-0 w-24 h-24 rounded-lg overflow-hidden bg-surface-light border border-border group hover:border-accent hover:shadow-md transition-all cursor-pointer"
         >
           {file.isVideo ? (
             <div className="w-full h-full flex items-center justify-center bg-surface-light">

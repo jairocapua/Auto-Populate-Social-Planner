@@ -10,7 +10,7 @@ interface GenerateButtonProps {
 export default function GenerateButton({ onClick, disabled, isGenerating }: GenerateButtonProps) {
   return (
     <Button
-      variant="primary"
+      variant="gold"
       size="lg"
       onClick={onClick}
       disabled={disabled || isGenerating}

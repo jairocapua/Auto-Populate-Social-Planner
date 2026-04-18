@@ -36,7 +36,7 @@ export default function UploadZone({ onFilesAdded, isDragging, dragHandlers, dis
         'relative border-2 border-dashed rounded-xl p-8 md:p-12 text-center cursor-pointer transition-all',
         isDragging
           ? 'border-accent bg-accent/5 scale-[1.01]'
-          : 'border-border hover:border-text-muted hover:bg-surface-light/50',
+          : 'border-border hover:border-accent hover:bg-accent/5',
         disabled && 'opacity-50 cursor-not-allowed'
       )}
     >

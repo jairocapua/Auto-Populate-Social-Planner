@@ -45,7 +45,7 @@ instagram: Punchy opening line, 2 descriptive sentences about the work, a blank 
 
 linkedin: Professional tone, opens with a business insight about the work shown, 3 short bullet points highlighting quality/expertise, ends with a call to action. Max 2-3 hashtags.
 
-google_business: Maximum 2 sentences, plain factual language. Must naturally include the word "roofing" and reference {{Region}} for local SEO.
+google_business: Maximum 2 sentences, plain factual language. Must naturally include the word "roofing" and reference for local SEO.
 
 RESPONSE FORMAT:
 Respond ONLY with valid JSON in the exact shape below. Use \n for line breaks within the strings. Do not use raw unescaped newlines. Return ONLY the raw JSON object.

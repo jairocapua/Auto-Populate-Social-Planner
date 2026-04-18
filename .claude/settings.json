@@ -55,6 +55,9 @@
       "Bash(taskkill //F //PID 9544 //PID 51048)",
       "Bash(awk '{print $5}')",
       "Bash(grep -v '^0$')"
+    ],
+    "additionalDirectories": [
+      "\\tmp"
     ]
   }
 }

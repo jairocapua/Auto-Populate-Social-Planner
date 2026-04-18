@@ -11,6 +11,9 @@ import GenerateButton from './components/actions/GenerateButton'
 import CaptionCardGrid from './components/captions/CaptionCardGrid'
 import ScheduleAllButton from './components/actions/ScheduleAllButton'
 import ToastContainer from './components/feedback/ToastContainer'
+import SystemPromptViewer from './components/ui/SystemPromptViewer'
+import ConfirmScheduleModal from './components/ui/ConfirmScheduleModal'
+import { PLATFORM_MAP } from './constants/platforms'
 
 export default function App() {
   const { toasts, addToast, removeToast } = useToast()
@@ -21,6 +24,7 @@ export default function App() {
 
   const [captions, setCaptions] = useState<CaptionData[]>([])
   const [customPrompt, setCustomPrompt] = useState('')
+  const [pendingConfirm, setPendingConfirm] = useState<{ type: 'single'; index: number } | { type: 'all' } | null>(null)
 
   const handleGenerate = useCallback(async () => {
     if (files.length === 0) return
@@ -73,6 +77,17 @@ export default function App() {
     }
   }, [captions, handleSchedule])
 
+  const handleConfirm = useCallback(async () => {
+    if (!pendingConfirm) return
+    const snapshot = pendingConfirm
+    setPendingConfirm(null)
+    if (snapshot.type === 'single') {
+      await handleSchedule(snapshot.index)
+    } else {
+      await handleScheduleAll()
+    }
+  }, [pendingConfirm, handleSchedule, handleScheduleAll])
+
   const allScheduled = captions.length > 0 && captions.every((c) => c.scheduled)
   const hasUnscheduled = captions.some((c) => !c.scheduled)
 
@@ -80,7 +95,7 @@ export default function App() {
     <div className="min-h-screen bg-bg text-text-primary font-body">
       <Header />
 
-      <main className="max-w-4xl mx-auto px-4 py-6 space-y-6">
+      <main className="max-w-7xl mx-auto px-4 py-6 space-y-6">
         {/* Upload zone */}
         <UploadZone
           onFilesAdded={addFiles}
@@ -91,6 +106,9 @@ export default function App() {
 
         {/* Thumbnail previews */}
         <ThumbnailGrid files={files} onRemove={removeFile} />
+
+        {/* System prompt viewer */}
+        <SystemPromptViewer />
 
         {/* Optional custom prompt */}
         {files.length > 0 && (
@@ -104,7 +122,7 @@ export default function App() {
               disabled={isGenerating}
               placeholder="e.g. Mention we used Redland tiles. Keep the tone friendly. Focus on the before/after transformation."
               rows={3}
-              className="w-full bg-surface border border-border rounded-lg px-3 py-2 text-sm text-text-primary placeholder:text-text-secondary/50 resize-none focus:outline-none focus:ring-2 focus:ring-accent/40 disabled:opacity-50 transition"
+              className="w-full bg-surface border border-border rounded-lg px-3 py-2 text-sm text-text-primary placeholder:text-text-secondary/50 resize-none hover:border-accent/60 focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent disabled:opacity-50 transition-colors"
             />
           </div>
         )}
@@ -122,15 +140,16 @@ export default function App() {
         <CaptionCardGrid
           captions={captions}
           isGenerating={isGenerating}
+          files={files}
           onCaptionChange={handleCaptionChange}
           onDateChange={handleDateChange}
-          onSchedule={handleSchedule}
+          onSchedule={(index) => setPendingConfirm({ type: 'single', index })}
         />
 
         {/* Schedule All button */}
         {captions.length > 0 && (
           <ScheduleAllButton
-            onClick={handleScheduleAll}
+            onClick={() => setPendingConfirm({ type: 'all' })}
             disabled={!hasUnscheduled}
             allScheduled={allScheduled}
           />
@@ -139,6 +158,33 @@ export default function App() {
 
       {/* Toast notifications */}
       <ToastContainer toasts={toasts} onClose={removeToast} />
+
+      {/* Confirmation modal */}
+      {pendingConfirm && (() => {
+        if (pendingConfirm.type === 'single') {
+          const caption = captions[pendingConfirm.index]
+          const config = PLATFORM_MAP[caption.platform]
+          if (!caption || !config) return null
+          return (
+            <ConfirmScheduleModal
+              payload={{ type: 'single', caption, config }}
+              onConfirm={handleConfirm}
+              onCancel={() => setPendingConfirm(null)}
+            />
+          )
+        }
+        const items = captions
+          .filter((c) => !c.scheduled)
+          .map((c) => ({ caption: c, config: PLATFORM_MAP[c.platform] }))
+          .filter((item) => item.config != null)
+        return (
+          <ConfirmScheduleModal
+            payload={{ type: 'all', items }}
+            onConfirm={handleConfirm}
+            onCancel={() => setPendingConfirm(null)}
+          />
+        )
+      })()}
     </div>
   )
 }
