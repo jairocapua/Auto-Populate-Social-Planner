@@ -1,7 +1,7 @@
 # RoofPost AI — Handoff Briefing
 
 ## TL;DR for the boss
-> We built an internal tool that replaces 4 Zapier Zaps with a single React + Node app. Roofing photos go in → GPT-4o writes platform-specific captions in British English → the owner edits them → direct API calls to GoHighLevel Social Planner schedule all 4 posts. Running on a laptop today; needs ~1 day of deployment work to run permanently.
+> We built an internal tool that replaces 4 Zapier Zaps with a single React + Node app. Roofing photos go in → GPT-4o writes platform-specific captions in British English → the owner edits them → direct API calls to GoHighLevel Social Planner schedule all 4 posts. Running on a laptop today; needs ~2–4 hours of deployment work to run permanently from any device.
 
 ---
 
@@ -16,18 +16,20 @@
 - Direct GHL Social Planner scheduling with the correct `status: "scheduled"` flag
 - Per-platform character counters + schedule datetime pickers
 - All 4 platforms verified scheduling correctly
+- **Password gate** — single-env-var login (`APP_PASSWORD`), bearer-token auth, session-scoped storage, auto-logout on 401
+- **Rate limiting** — 10 req/min on `/api/generate`, 20 req/min on `/api/revise`, 10/15min on `/api/login`
+- **Timezone safety** — schedule times sent as UTC ISO from the browser's UK locale, safe across BST/GMT transitions
+- **Session persistence** — captions, schedule times, and custom prompt survive F5; cleared automatically when all 4 are scheduled
+- **GHL retry** — `/api/schedule` auto-retries up to 2× on 5xx errors with 500ms backoff
+- **UI health badge** — green pulsing dot in the header confirms all API keys are configured; turns red with a hover tooltip identifying any missing keys; polls every 30 seconds
 
 ### Works but has known limitations
 - **Local only** — runs on the laptop. Phone access on job sites won't work until deployed.
-- **No auth** — anyone who reaches `localhost:3001` can generate/schedule. Fine on the owner's machine, risky if deployed.
-- **Refresh loses state** — accidentally hitting F5 while reviewing captions wipes edits.
 
 ### Not built yet
-- Password gate
-- Public deployment
-- Timezone safety (BST/GMT edge case)
-- OpenAI rate-limiting (protects API credit)
+- Public deployment (Railway recommended)
 - Video support (currently skips media → generic text fallback)
+- Audit log / simple reporting
 
 ---
 
@@ -45,35 +47,36 @@
 
 ---
 
-### 2. No authentication — Critical once deployed
-**Problem:** Once deployed, any URL visitor could burn OpenAI credit and post to the GHL account.
-**Fix:** Simple password gate — one env variable, one login screen, session cookie.
-**Options:**
-- Simple `VITE_APP_PASSWORD` check (5 min, good enough for single-user)
-- Proper auth with Clerk/Auth0 (overkill for one person)
-
-**Effort:** 30 minutes. **Must-have before deploying publicly.**
-
----
-
-### 3. Timezone drift during BST transitions — Medium
-**Problem:** UK switches between GMT and BST twice a year (last Sunday of Mar/Oct). The `datetime-local` input doesn't carry timezone info, so a post scheduled for "9am" right around the clock change could fire an hour early/late.
-**Fix:** Explicitly send `Europe/London` timezone with every schedule request.
-**Effort:** 1 hour.
+### 2. ~~No authentication~~ ✅ DONE (2026-04-18)
+**Shipped:** Single-password gate protecting all API routes.
+- `APP_PASSWORD` env var on the backend
+- `POST /api/login` issues a UUID bearer token (in-memory store)
+- Frontend stores token in `sessionStorage` — wiped on tab close
+- `requireAuth` middleware on `/api/generate`, `/api/revise`, `/api/upload`, `/api/schedule`
+- Any 401 from the backend auto-redirects the UI to the login screen
+- Logout button in the header clears the token
+- Zero new npm packages (uses Node's built-in `crypto.randomUUID()`)
 
 ---
 
-### 4. No OpenAI rate-limit — Critical once deployed
-**Problem:** A malicious visitor (or a stuck F5) could fire hundreds of Generate requests, each costing $0.01–0.03. In 5 minutes that's tens of dollars.
-**Fix:** `express-rate-limit` — cap at e.g. 10 requests/minute per IP.
-**Effort:** 15 minutes.
+### 3. ~~Timezone drift during BST transitions~~ ✅ DONE (2026-04-20)
+**Shipped:** Frontend now calls `new Date(caption.scheduleDate).toISOString()` before sending, so the browser's UK timezone converts the naive datetime-local string to a proper UTC ISO string. The backend receives an unambiguous UTC timestamp regardless of where it's deployed.
 
 ---
 
-### 5. Session not persisted — Low
-**Problem:** Accidental refresh wipes captions, schedule times, and uploaded photos. Would need to regenerate from scratch.
-**Fix:** Save `captions[]` to sessionStorage on every change.
-**Effort:** 20 minutes.
+### 4. ~~No OpenAI rate-limit~~ ✅ DONE (2026-04-20)
+**Shipped:** Zero-dependency rate limiter built directly into `server.js`.
+- `/api/generate` — 10 requests/min per IP
+- `/api/revise` — 20 requests/min per IP
+- `/api/login` — 10 requests per 15 min per IP
+
+---
+
+### 5. ~~Session not persisted~~ ✅ DONE (2026-04-20)
+**Shipped:** `captions[]` and `customPrompt` saved to `sessionStorage` on every change.
+- Captions, schedule dates, edited text, and custom prompt all survive F5
+- If all 4 captions are already `scheduled: true` on restore, storage is cleared and app starts fresh
+- Photos cannot be persisted (browser `File` objects are not serialisable) — re-upload needed after refresh
 
 ---
 
@@ -84,10 +87,8 @@
 
 ---
 
-### 7. No retry on transient GHL failures — Low
-**Problem:** If GHL returns a random 502 during peak load, the post fails and requires manual retry.
-**Fix:** Auto-retry up to 2x on 5xx errors with 500ms backoff.
-**Effort:** 20 minutes.
+### 7. ~~No retry on transient GHL failures~~ ✅ DONE (2026-04-20)
+**Shipped:** `fetchWithRetry` wraps the `/api/schedule` call — retries up to 2× on any `5xx` response with 500ms backoff. `4xx` errors (bad request, unauthorised) are returned immediately without retrying.
 
 ---
 
@@ -98,22 +99,30 @@
 
 ---
 
+### 9. ~~No UI health indicator~~ ✅ DONE (2026-04-20)
+**Shipped:** Health badge in the header polls `/api/health` every 30 seconds.
+- Green pulsing dot = all 4 env vars confirmed present
+- Red dot = one or more missing; hover tooltip names the specific missing keys
+- Grey dot = initial loading state
+
+---
+
 ## Priority Roadmap
 
-### Phase A — Before showing the boss a live demo (2–3 hrs)
-1. Add password gate (`VITE_APP_PASSWORD`)
-2. Add rate-limit on `/api/generate`
-3. Fix timezone handling
+### Phase A — Complete ✅
+1. ✅ ~~Add password gate~~ **DONE 2026-04-18**
+2. ✅ ~~Add rate-limit on `/api/generate`~~ **DONE 2026-04-20**
+3. ✅ ~~Fix timezone handling~~ **DONE 2026-04-20**
 
-### Phase B — Before daily use (4–6 hrs)
-4. Deploy to Railway with custom domain
-5. Session persistence (survive refresh)
-6. Basic retry on GHL 5xx
+### Phase B — Mostly complete
+4. ⬜ **Deploy to Railway with custom domain** ← next priority
+5. ✅ ~~Session persistence (survive refresh)~~ **DONE 2026-04-20**
+6. ✅ ~~Basic retry on GHL 5xx~~ **DONE 2026-04-20**
 
-### Phase C — Polish when time allows (4–6 hrs)
-7. Video support
-8. Audit log / simple reporting
-9. UI health badge (green dot = all systems go)
+### Phase C — In progress
+7. ⬜ Video support (3–4 hrs)
+8. ⬜ Audit log / simple reporting (1–2 hrs)
+9. ✅ ~~UI health badge~~ **DONE 2026-04-20**
 
 ---
 
@@ -121,7 +130,7 @@
 
 | Item | Current (local) | If deployed |
 |---|---|---|
-| OpenAI GPT-4o | ~$3–5/mo (light use) | Cap at $20/mo with rate-limiting |
+| OpenAI GPT-4o | ~$3–5/mo (light use) | Capped at ~$20/mo with rate-limiting |
 | GHL | $0 extra (included in existing plan) | $0 extra |
 | Hosting | $0 (local) | $5/mo (Railway) or $0 (Render free tier) |
 | **Total** | **~$3–5/mo** | **~$10–25/mo** |
@@ -132,14 +141,16 @@ Compare to **previous design** ($20 Zapier tier + $3–5 OpenAI = ~$25/mo minimu
 
 ## Suggested Pitch to the Boss
 
-> "The tool is built and works on my laptop. To make it production-ready and use from my phone on site, it needs ~1 day of polish:
-> - Password protection (30 min)
-> - Rate limiting (15 min)
-> - Timezone fix (1 hr)
-> - Cloud deployment (2–4 hrs)
-> - Refresh safety + retry (1 hr)
+> "The tool is built and works on my laptop — fully password protected, rate limited, timezone-safe, and refresh-proof. The only thing left to use it from my phone on site is cloud deployment (~2–4 hrs):
+> - ~~Password protection~~ ✅ done
+> - ~~Rate limiting~~ ✅ done
+> - ~~Timezone fix~~ ✅ done
+> - ~~Refresh safety~~ ✅ done
+> - ~~GHL retry~~ ✅ done
+> - ~~Health badge~~ ✅ done
+> - **Cloud deployment** ← last step (2–4 hrs, ~£4/mo on Railway)
 >
-> Running cost will be ~£10–20/mo — less than the previous Zapier tier. Can I finish the last 1 day of work this week?"
+> Running cost will be ~£10–20/mo — less than the previous Zapier tier."
 
 ---
 
@@ -149,15 +160,17 @@ Compare to **previous design** ($20 Zapier tier + $3–5 OpenAI = ~$25/mo minimu
 Browser (React + Vite SPA)
   ↓ fetch /api/*
 Express Backend (localhost:3001 — holds all API keys)
+  ├─ /api/health    → env var check (public, no auth)
+  ├─ /api/login     → issues bearer token
   ├─ /api/generate  → OpenAI GPT-4o Vision
   ├─ /api/revise    → OpenAI GPT-4o
   ├─ /api/upload    → GHL Media Library
-  └─ /api/schedule  → GHL Social Planner
-                      (accountIds + scheduleDate + status:"scheduled")
+  ├─ /api/schedule  → GHL Social Planner (with 2× retry on 5xx)
+  └─ /api/scheduled-posts → GHL Social Planner (read)
 ```
 
-**Tech stack:** React 18, TypeScript, Vite, Tailwind v4, Express, Node 22, OpenAI SDK, GoHighLevel API v2.
+**Tech stack:** React 19, TypeScript, Vite, Tailwind v4, Express, Node 22, OpenAI SDK, GoHighLevel API v2.
 
-**Required env vars:** `OPENAI_API_KEY`, `GHL_API_KEY` (PIT), `GHL_LOCATION_ID`, `GHL_USER_ID`.
+**Required env vars:** `OPENAI_API_KEY`, `GHL_API_KEY` (PIT), `GHL_LOCATION_ID`, `GHL_USER_ID`, `APP_PASSWORD`.
 
 **PIT scopes required:** `medias.write`, `medias.readonly`, `socialplanner/account.readonly`, `socialplanner/post.readonly`, `socialplanner/post.write`.

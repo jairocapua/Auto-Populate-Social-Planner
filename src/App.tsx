@@ -1,10 +1,13 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import type { CaptionData } from './types'
 import { useFileUpload } from './hooks/useFileUpload'
 import { useCaptionGeneration } from './hooks/useCaptionGeneration'
 import { useToast } from './hooks/useToast'
+import { useScheduledPosts } from './hooks/useScheduledPosts'
 import { schedulePost } from './services/scheduler'
+import LoginScreen from './components/auth/LoginScreen'
 import Header from './components/layout/Header'
+import { getToken, clearToken, registerUnauthorizedHandler } from './services/auth'
 import UploadZone from './components/upload/UploadZone'
 import ThumbnailGrid from './components/upload/ThumbnailGrid'
 import GenerateButton from './components/actions/GenerateButton'
@@ -13,17 +16,68 @@ import ScheduleAllButton from './components/actions/ScheduleAllButton'
 import ToastContainer from './components/feedback/ToastContainer'
 import SystemPromptViewer from './components/ui/SystemPromptViewer'
 import ConfirmScheduleModal from './components/ui/ConfirmScheduleModal'
+import ScheduledPostsPanel from './components/schedule/ScheduledPostsPanel'
 import { PLATFORM_MAP } from './constants/platforms'
 
+const SESSION_KEY = 'roofpost_captions'
+
 export default function App() {
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => getToken() !== null)
+
+  const handleLogout = useCallback(() => {
+    clearToken()
+    setIsAuthenticated(false)
+  }, [])
+
+  useEffect(() => {
+    registerUnauthorizedHandler(handleLogout)
+  }, [handleLogout])
+
   const { toasts, addToast, removeToast } = useToast()
   const { files, addFiles, removeFile, isDragging, dragHandlers } = useFileUpload(
     (msg) => addToast('error', msg)
   )
   const { generate, isGenerating } = useCaptionGeneration()
+  const {
+    posts: scheduledPosts,
+    isLoading: isLoadingScheduled,
+    error: scheduledError,
+    refresh: refreshScheduled,
+  } = useScheduledPosts()
 
-  const [captions, setCaptions] = useState<CaptionData[]>([])
-  const [customPrompt, setCustomPrompt] = useState('')
+  const [captions, setCaptions] = useState<CaptionData[]>(() => {
+    try {
+      const saved = sessionStorage.getItem(SESSION_KEY)
+      if (!saved) return []
+      const parsed = JSON.parse(saved) as CaptionData[]
+      if (parsed.every((c) => c.scheduled)) {
+        sessionStorage.removeItem(SESSION_KEY)
+        return []
+      }
+      return parsed
+    } catch {
+      return []
+    }
+  })
+  useEffect(() => {
+    if (captions.length > 0) {
+      sessionStorage.setItem(SESSION_KEY, JSON.stringify(captions))
+    } else {
+      sessionStorage.removeItem(SESSION_KEY)
+    }
+  }, [captions])
+
+  const [customPrompt, setCustomPrompt] = useState(() =>
+    sessionStorage.getItem('roofpost_prompt') ?? ''
+  )
+
+  useEffect(() => {
+    if (customPrompt) {
+      sessionStorage.setItem('roofpost_prompt', customPrompt)
+    } else {
+      sessionStorage.removeItem('roofpost_prompt')
+    }
+  }, [customPrompt])
   const [pendingConfirm, setPendingConfirm] = useState<{ type: 'single'; index: number } | { type: 'all' } | null>(null)
 
   const handleGenerate = useCallback(async () => {
@@ -60,13 +114,14 @@ export default function App() {
           prev.map((c, i) => (i === index ? { ...c, scheduled: true } : c))
         )
         addToast('success', `${caption.platform} post scheduled!`)
+        refreshScheduled()
       } else if (result.error === 'upload_failed') {
         addToast('error', `Failed to upload image for ${caption.platform}.`)
       } else {
         addToast('error', `Failed to schedule ${caption.platform}: ${result.details || 'GHL rejected the post'}`)
       }
     },
-    [captions, files, addToast]
+    [captions, files, addToast, refreshScheduled]
   )
 
   const handleScheduleAll = useCallback(async () => {
@@ -91,11 +146,23 @@ export default function App() {
   const allScheduled = captions.length > 0 && captions.every((c) => c.scheduled)
   const hasUnscheduled = captions.some((c) => !c.scheduled)
 
+  if (!isAuthenticated) {
+    return <LoginScreen onSuccess={() => setIsAuthenticated(true)} />
+  }
+
   return (
     <div className="min-h-screen bg-bg text-text-primary font-body">
-      <Header />
+      <Header onLogout={handleLogout} />
 
       <main className="max-w-7xl mx-auto px-4 py-6 space-y-6">
+        {/* Scheduled posts panel (read-only, GHL) */}
+        <ScheduledPostsPanel
+          posts={scheduledPosts}
+          isLoading={isLoadingScheduled}
+          error={scheduledError}
+          onRefresh={refreshScheduled}
+        />
+
         {/* Upload zone */}
         <UploadZone
           onFilesAdded={addFiles}

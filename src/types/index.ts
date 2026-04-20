@@ -30,3 +30,13 @@ export interface Toast {
   type: 'success' | 'error'
   message: string
 }
+
+export interface ScheduledPost {
+  id: string
+  platforms: Platform[]
+  caption: string
+  scheduleDate: string
+  status: string
+  mediaUrls: string[]
+  type: string
+}

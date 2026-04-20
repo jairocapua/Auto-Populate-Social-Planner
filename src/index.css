@@ -41,6 +41,15 @@ body {
   min-height: 100vh;
 }
 
+/* Pointer cursor on all interactive elements (Tailwind 4 preflight defaults to `default`) */
+button:not(:disabled),
+[role="button"]:not([aria-disabled="true"]),
+summary,
+label[for],
+a[href] {
+  cursor: pointer;
+}
+
 /* Custom scrollbar for light theme */
 ::-webkit-scrollbar {
   width: 8px;

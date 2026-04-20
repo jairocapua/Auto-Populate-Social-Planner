@@ -54,7 +54,8 @@
       "Bash(curl -s -w '\\\\nHTTP %{http_code}\\\\n' -X POST https://services.leadconnectorhq.com/social-media-posting/Gxry1a2QLdf9fdbKkdhz/posts -H 'Authorization: Bearer pit-bb771779-284f-4569-83f5-25df050bc251' -H 'Version: 2021-07-28' -H 'Content-Type: application/json' -d '{}')",
       "Bash(taskkill //F //PID 9544 //PID 51048)",
       "Bash(awk '{print $5}')",
-      "Bash(grep -v '^0$')"
+      "Bash(grep -v '^0$')",
+      "mcp__claude_ai_Context7__resolve-library-id"
     ],
     "additionalDirectories": [
       "\\tmp"

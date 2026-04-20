@@ -3,6 +3,7 @@ import cors from 'cors'
 import OpenAI from 'openai'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
+import { randomUUID } from 'crypto'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -12,6 +13,65 @@ const PORT = process.env.PORT || 3001
 // Parse large JSON bodies (base64 images can be several MB)
 app.use(express.json({ limit: '50mb' }))
 app.use(cors())
+
+// ---------------------------------------------------------------------------
+// Rate limiting — protects OpenAI credit from runaway requests
+// ---------------------------------------------------------------------------
+function createRateLimiter({ windowMs, max, message }) {
+  const log = new Map()
+  return (req, res, next) => {
+    const key = req.ip || req.socket?.remoteAddress || 'unknown'
+    const now = Date.now()
+    const cutoff = now - windowMs
+    const timestamps = (log.get(key) || []).filter(t => t > cutoff)
+    timestamps.push(now)
+    log.set(key, timestamps)
+    if (timestamps.length > max) {
+      return res.status(429).json({ error: message })
+    }
+    next()
+  }
+}
+
+const generateLimiter = createRateLimiter({
+  windowMs: 60_000,
+  max: 10,
+  message: 'Too many generate requests — wait a minute and try again.',
+})
+
+const reviseLimiter = createRateLimiter({
+  windowMs: 60_000,
+  max: 20,
+  message: 'Too many revise requests — wait a minute and try again.',
+})
+
+const loginLimiter = createRateLimiter({
+  windowMs: 15 * 60_000,
+  max: 10,
+  message: 'Too many login attempts — try again in 15 minutes.',
+})
+
+// ---------------------------------------------------------------------------
+// Auth — simple password gate
+// ---------------------------------------------------------------------------
+const validTokens = new Set()
+
+function requireAuth(req, res, next) {
+  const authHeader = req.headers['authorization']
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).json({ error: 'Unauthorized' })
+  if (!validTokens.has(authHeader.slice(7))) return res.status(401).json({ error: 'Unauthorized' })
+  next()
+}
+
+app.post('/api/login', loginLimiter, (req, res) => {
+  const { password } = req.body
+  const expected = process.env.APP_PASSWORD
+  if (!expected) return res.status(500).json({ error: 'Server misconfiguration' })
+  if (!password || password !== expected) return res.status(401).json({ error: 'Incorrect password' })
+  const token = randomUUID()
+  validTokens.add(token)
+  res.json({ token })
+})
 
 // ---------------------------------------------------------------------------
 // OpenAI client (lazy init)
@@ -84,7 +144,7 @@ function parseAIResponse(text) {
   throw new Error('Failed to parse AI response')
 }
 
-app.post('/api/generate', async (req, res) => {
+app.post('/api/generate', requireAuth, generateLimiter, async (req, res) => {
   try {
     const { images, hasOnlyVideos, customPrompt } = req.body
     // images: Array<{ base64: string, mediaType: string }>
@@ -148,7 +208,7 @@ const PLATFORM_RULES = {
   google_business: 'Maximum 2 sentences, plain factual language. Must naturally include the word "roofing" and reference a region in England for local SEO.',
 }
 
-app.post('/api/revise', async (req, res) => {
+app.post('/api/revise', requireAuth, reviseLimiter, async (req, res) => {
   try {
     const { platform, currentCaption, instruction } = req.body
     if (!platform || !currentCaption || !instruction) {
@@ -183,7 +243,7 @@ app.post('/api/revise', async (req, res) => {
 // ---------------------------------------------------------------------------
 // POST /api/upload — Upload image to GHL Media Library, return public URL
 // ---------------------------------------------------------------------------
-app.post('/api/upload', async (req, res) => {
+app.post('/api/upload', requireAuth, async (req, res) => {
   try {
     const { base64, fileName, mediaType } = req.body
 
@@ -259,6 +319,10 @@ const GHL_PLATFORM = {
   google_business: 'google',
 }
 
+const GHL_PLATFORM_REVERSE = Object.fromEntries(
+  Object.entries(GHL_PLATFORM).map(([app, ghl]) => [ghl, app])
+)
+
 let accountsCache = null
 let accountsCacheTime = 0
 const ACCOUNTS_TTL_MS = 5 * 60 * 1000
@@ -283,7 +347,7 @@ async function getSocialAccounts() {
   return accountsCache
 }
 
-app.post('/api/schedule', async (req, res) => {
+app.post('/api/schedule', requireAuth, async (req, res) => {
   try {
     const { platform, caption, scheduleDate, imageUrl, imageType } = req.body
 
@@ -344,6 +408,136 @@ app.post('/api/schedule', async (req, res) => {
     res.json({ ok: true, postId })
   } catch (err) {
     console.error('Schedule error:', err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// GET /api/scheduled-posts — List upcoming scheduled posts (next 30 days)
+// ---------------------------------------------------------------------------
+app.get('/api/scheduled-posts', requireAuth, async (_req, res) => {
+  try {
+    const ghlApiKey = process.env.GHL_API_KEY
+    const ghlLocationId = process.env.GHL_LOCATION_ID
+    if (!ghlApiKey || !ghlLocationId) {
+      return res.status(500).json({
+        error: 'GHL_API_KEY and GHL_LOCATION_ID environment variables are required',
+      })
+    }
+
+    const now = Date.now()
+    const thirtyDays = 30 * 24 * 60 * 60 * 1000
+
+    const accounts = await getSocialAccounts()
+    const accountIds = accounts.map((a) => a.id).filter(Boolean)
+    if (accountIds.length === 0) {
+      return res.json({ posts: [] })
+    }
+
+    const fetchForAccount = async (accountId) => {
+      const body = {
+        type: 'scheduled',
+        accounts: accountId,
+        skip: '0',
+        limit: '100',
+        fromDate: new Date(now).toISOString(),
+        toDate: new Date(now + thirtyDays).toISOString(),
+      }
+      const r = await fetch(
+        `https://services.leadconnectorhq.com/social-media-posting/${ghlLocationId}/posts/list`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${ghlApiKey}`,
+            Version: '2021-07-28',
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+          },
+          body: JSON.stringify(body),
+        }
+      )
+      const txt = await r.text()
+      if (!r.ok) {
+        console.error(`GHL list-posts error for ${accountId}:`, r.status, txt)
+        return { ok: false, status: r.status, details: txt }
+      }
+      const j = JSON.parse(txt)
+      return { ok: true, posts: j?.posts || j?.results?.posts || j?.data || [] }
+    }
+
+    const results = await Promise.all(
+      accountIds.map(async (id) => ({ accountId: id, ...(await fetchForAccount(id)) }))
+    )
+    const firstError = results.find((r) => !r.ok)
+    if (firstError) {
+      return res.status(firstError.status).json({
+        error: `GHL rejected list request (${firstError.status})`,
+        details: firstError.details,
+      })
+    }
+
+    // Tag each post with the accountId we queried for, so we can derive the platform
+    const rawPosts = results.flatMap((r) =>
+      r.posts.map((p) => ({ ...p, _queriedAccountId: r.accountId }))
+    )
+
+    // DEBUG: log first post shape to understand GHL response
+    if (rawPosts[0]) {
+      console.log('[scheduled-posts] first raw post keys:', Object.keys(rawPosts[0]))
+      console.log('[scheduled-posts] first raw post:', JSON.stringify(rawPosts[0], null, 2))
+    }
+
+    const accountIdToPlatform = new Map(
+      accounts.map((a) => [a.id, GHL_PLATFORM_REVERSE[a.platform]])
+    )
+
+    const byId = new Map()
+    for (const p of rawPosts) {
+      const id = p._id || p.id
+      if (!id) continue
+
+      // Primary: the account we queried with is definitely one of the post's platforms
+      const platforms = []
+      const queriedPlatform = accountIdToPlatform.get(p._queriedAccountId)
+      if (queriedPlatform) platforms.push(queriedPlatform)
+
+      const scheduleDate = p.scheduleDate || p.publishAt || p.createdAt
+      const mediaRaw = p.media || p.mediaUrls || p.attachments || []
+      const mediaUrls = (Array.isArray(mediaRaw) ? mediaRaw : [])
+        .map((m) => (typeof m === 'string' ? m : m?.url || m?.src))
+        .filter(Boolean)
+
+      const sourceType =
+        p.source || p.origin || p.createdFrom || p.category || p.queueName
+      const typeLabel = sourceType
+        ? String(sourceType).replace(/[_-]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+        : 'Post Composer'
+
+      const existing = byId.get(id)
+      if (existing) {
+        for (const pl of platforms) {
+          if (!existing.platforms.includes(pl)) existing.platforms.push(pl)
+        }
+      } else {
+        byId.set(id, {
+          id,
+          platforms,
+          caption: p.summary || p.caption || '',
+          scheduleDate: scheduleDate ? new Date(scheduleDate).toISOString() : null,
+          status: p.status || 'scheduled',
+          mediaUrls,
+          type: typeLabel,
+        })
+      }
+    }
+
+    const posts = Array.from(byId.values())
+      .filter((p) => p.scheduleDate && p.platforms.length)
+      .sort((a, b) => new Date(a.scheduleDate) - new Date(b.scheduleDate))
+
+    res.json({ posts })
+  } catch (err) {
+    console.error('Scheduled posts error:', err.message)
     res.status(500).json({ error: err.message })
   }
 })

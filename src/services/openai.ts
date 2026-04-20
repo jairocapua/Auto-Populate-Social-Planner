@@ -1,9 +1,9 @@
 import type { UploadedFile, CaptionData, Platform } from '../types'
+import { authFetch } from './auth'
 
 export async function reviseCaption(platform: string, currentCaption: string, instruction: string): Promise<string> {
-  const res = await fetch('/api/revise', {
+  const res = await authFetch('/api/revise', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ platform, currentCaption, instruction }),
   })
   if (!res.ok) {
@@ -33,9 +33,8 @@ export async function generateCaptions(files: UploadedFile[], customPrompt?: str
     customPrompt: customPrompt?.trim() || undefined,
   }
 
-  const res = await fetch('/api/generate', {
+  const res = await authFetch('/api/generate', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
 

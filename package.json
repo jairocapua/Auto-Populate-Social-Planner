@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "concurrently \"node --env-file=.env server.js\" \"vite\"",
+    "dev": "concurrently --names server,vite -c blue,green --kill-others \"npm:dev:server\" \"npm:dev:client\"",
     "dev:server": "node --env-file=.env server.js",
     "dev:client": "vite",
     "build": "tsc -b && vite build",
