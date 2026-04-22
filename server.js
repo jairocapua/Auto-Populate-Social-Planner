@@ -1,6 +1,6 @@
 import express from 'express'
 import cors from 'cors'
-import OpenAI from 'openai'
+import Anthropic from '@anthropic-ai/sdk'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import { randomUUID } from 'crypto'
@@ -10,12 +10,17 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const app = express()
 const PORT = process.env.PORT || 3001
 
+app.set('trust proxy', 1)
+
 // Parse large JSON bodies (base64 images can be several MB)
 app.use(express.json({ limit: '50mb' }))
-app.use(cors())
+
+// CORS — pin to ALLOWED_ORIGIN in production, otherwise open (for local dev)
+const allowedOrigin = process.env.ALLOWED_ORIGIN
+app.use(cors(allowedOrigin ? { origin: allowedOrigin } : {}))
 
 // ---------------------------------------------------------------------------
-// Rate limiting — protects OpenAI credit from runaway requests
+// Rate limiting — protects Anthropic credit from runaway requests
 // ---------------------------------------------------------------------------
 function createRateLimiter({ windowMs, max, message }) {
   const log = new Map()
@@ -74,23 +79,43 @@ app.post('/api/login', loginLimiter, (req, res) => {
 })
 
 // ---------------------------------------------------------------------------
-// OpenAI client (lazy init)
+// Service-health tracking — sticky "last error" cleared on next success.
+// Powers the /api/health validity probe so the UI can distinguish between
+// "key is configured" vs "key actually works".
 // ---------------------------------------------------------------------------
-let openai = null
+const serviceStatus = {
+  anthropic: { lastSuccess: null, lastError: null },
+  ghl: { lastSuccess: null, lastError: null },
+}
 
-function getOpenAI() {
-  if (!openai) {
-    const apiKey = process.env.OPENAI_API_KEY
-    if (!apiKey) {
-      throw new Error('OPENAI_API_KEY environment variable is not set')
-    }
-    openai = new OpenAI({ apiKey })
-  }
-  return openai
+function markSuccess(service) {
+  serviceStatus[service].lastSuccess = Date.now()
+  serviceStatus[service].lastError = null
+}
+
+function markError(service, err) {
+  const msg = err?.error?.message || err?.message || String(err)
+  serviceStatus[service].lastError = { message: msg, at: Date.now() }
 }
 
 // ---------------------------------------------------------------------------
-// POST /api/generate — Generate captions via GPT-4o Vision
+// Anthropic client (lazy init)
+// ---------------------------------------------------------------------------
+let anthropic = null
+
+function getAnthropic() {
+  if (!anthropic) {
+    const apiKey = process.env.ANTHROPIC_API_KEY
+    if (!apiKey) {
+      throw new Error('ANTHROPIC_API_KEY environment variable is not set')
+    }
+    anthropic = new Anthropic({ apiKey })
+  }
+  return anthropic
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/generate — Generate captions via Claude Sonnet 4.6 (vision)
 // ---------------------------------------------------------------------------
 const SYSTEM_PROMPT = `You are a social media copywriter for a professional roofing company based in England, UK.
 CRITICAL: You must use strict British English spelling and grammar (e.g., labour, bespoke).
@@ -149,7 +174,7 @@ app.post('/api/generate', requireAuth, generateLimiter, async (req, res) => {
     const { images, hasOnlyVideos, customPrompt } = req.body
     // images: Array<{ base64: string, mediaType: string }>
 
-    const client = getOpenAI()
+    const client = getAnthropic()
     const content = []
 
     const extraInstruction = customPrompt
@@ -161,10 +186,11 @@ app.post('/api/generate', requireAuth, generateLimiter, async (req, res) => {
     } else {
       for (const img of images) {
         content.push({
-          type: 'image_url',
-          image_url: {
-            url: `data:${img.mediaType};base64,${img.base64}`,
-            detail: 'low',
+          type: 'image',
+          source: {
+            type: 'base64',
+            media_type: img.mediaType,
+            data: img.base64,
           },
         })
       }
@@ -174,24 +200,24 @@ app.post('/api/generate', requireAuth, generateLimiter, async (req, res) => {
       })
     }
 
-    const response = await client.chat.completions.create({
-      model: 'gpt-4o',
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content },
-      ],
+    const response = await client.messages.create({
+      model: 'claude-sonnet-4-6',
       max_tokens: 4096,
-      temperature: 0.7,
+      system: SYSTEM_PROMPT,
+      messages: [{ role: 'user', content }],
     })
 
-    const text = response.choices[0]?.message?.content
+    const textBlock = response.content.find((b) => b.type === 'text')
+    const text = textBlock?.text
     if (!text) {
       return res.status(500).json({ error: 'No response from AI' })
     }
 
     const captions = parseAIResponse(text)
+    markSuccess('anthropic')
     res.json({ captions })
   } catch (err) {
+    markError('anthropic', err)
     console.error('Generate error:', err.message)
     const status = err.status || 500
     res.status(status).json({ error: err.message })
@@ -215,26 +241,24 @@ app.post('/api/revise', requireAuth, reviseLimiter, async (req, res) => {
       return res.status(400).json({ error: 'platform, currentCaption, and instruction are required' })
     }
     const rules = PLATFORM_RULES[platform] || 'Follow standard social media best practices.'
-    const client = getOpenAI()
-    const response = await client.chat.completions.create({
-      model: 'gpt-4o',
+    const client = getAnthropic()
+    const response = await client.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 1024,
+      system: `You are a social media copywriter for a professional roofing company in England, UK. Use strict British English spelling and grammar.\n\nPlatform rules for ${platform}: ${rules}\n\nRevise captions to follow these rules exactly while applying the user's instruction.`,
       messages: [
-        {
-          role: 'system',
-          content: `You are a social media copywriter for a professional roofing company in England, UK. Use strict British English spelling and grammar.\n\nPlatform rules for ${platform}: ${rules}\n\nRevise captions to follow these rules exactly while applying the user's instruction.`,
-        },
         {
           role: 'user',
           content: `Current caption:\n${currentCaption}\n\nRevision instruction: ${instruction}\n\nReturn ONLY the revised caption text. No JSON, no preamble, no explanation.`,
         },
       ],
-      max_tokens: 1024,
-      temperature: 0.7,
     })
-    const caption = response.choices[0]?.message?.content?.trim()
+    const caption = response.content.find((b) => b.type === 'text')?.text?.trim()
     if (!caption) return res.status(500).json({ error: 'No response from AI' })
+    markSuccess('anthropic')
     res.json({ caption })
   } catch (err) {
+    markError('anthropic', err)
     console.error('Revise error:', err.message)
     res.status(err.status || 500).json({ error: err.message })
   }
@@ -283,6 +307,7 @@ app.post('/api/upload', requireAuth, async (req, res) => {
 
     if (!ghlRes.ok) {
       const errText = await ghlRes.text()
+      markError('ghl', new Error(`upload ${ghlRes.status}: ${errText}`))
       console.error('GHL upload error:', ghlRes.status, errText)
       return res.status(ghlRes.status).json({
         error: `GHL Media Library upload failed (${ghlRes.status})`,
@@ -301,8 +326,10 @@ app.post('/api/upload', requireAuth, async (req, res) => {
       return res.status(500).json({ error: 'GHL upload succeeded but no URL returned', raw: ghlData })
     }
 
+    markSuccess('ghl')
     res.json({ url: fileUrl })
   } catch (err) {
+    markError('ghl', err)
     console.error('Upload error:', err.message)
     res.status(500).json({ error: err.message })
   }
@@ -339,7 +366,9 @@ async function getSocialAccounts() {
   )
   if (!res.ok) {
     const txt = await res.text()
-    throw new Error(`Failed to fetch GHL accounts (${res.status}): ${txt}`)
+    const err = new Error(`Failed to fetch GHL accounts (${res.status}): ${txt}`)
+    markError('ghl', err)
+    throw err
   }
   const data = await res.json()
   accountsCache = data.results?.accounts || []
@@ -396,6 +425,7 @@ app.post('/api/schedule', requireAuth, async (req, res) => {
 
     const respText = await ghlRes.text()
     if (!ghlRes.ok) {
+      markError('ghl', new Error(`schedule ${ghlRes.status}: ${respText}`))
       console.error('GHL schedule error:', ghlRes.status, respText)
       return res.status(ghlRes.status).json({
         error: `GHL rejected post (${ghlRes.status})`,
@@ -405,8 +435,10 @@ app.post('/api/schedule', requireAuth, async (req, res) => {
 
     const respData = JSON.parse(respText)
     const postId = respData?.post?._id || respData?.results?._id || respData?._id
+    markSuccess('ghl')
     res.json({ ok: true, postId })
   } catch (err) {
+    markError('ghl', err)
     console.error('Schedule error:', err.message)
     res.status(500).json({ error: err.message })
   }
@@ -535,23 +567,61 @@ app.get('/api/scheduled-posts', requireAuth, async (_req, res) => {
       .filter((p) => p.scheduleDate && p.platforms.length)
       .sort((a, b) => new Date(a.scheduleDate) - new Date(b.scheduleDate))
 
+    markSuccess('ghl')
     res.json({ posts })
   } catch (err) {
+    markError('ghl', err)
     console.error('Scheduled posts error:', err.message)
     res.status(500).json({ error: err.message })
   }
 })
 
 // ---------------------------------------------------------------------------
-// Health check
+// Health check — env-var presence + last-known service status + GHL account
+// expirations. Polled every 30s by the frontend badge.
 // ---------------------------------------------------------------------------
-app.get('/api/health', (_req, res) => {
+function serviceHealth(service, envVarPresent) {
+  if (!envVarPresent) return { ok: false, reason: 'key_missing' }
+  const s = serviceStatus[service]
+  if (s.lastError) return { ok: false, reason: 'error', message: s.lastError.message, at: s.lastError.at }
+  return { ok: true, lastSuccess: s.lastSuccess }
+}
+
+app.get('/api/health', async (_req, res) => {
+  const anthropic = serviceHealth('anthropic', !!process.env.ANTHROPIC_API_KEY)
+  const ghl = serviceHealth('ghl', !!process.env.GHL_API_KEY)
+  const ghlLocation = !!process.env.GHL_LOCATION_ID
+  const ghlUser = !!process.env.GHL_USER_ID
+
+  // Include GHL account expirations if the cache is warm. Don't trigger a fetch —
+  // keep /api/health fast; the cache warms naturally on the first schedule call.
+  let ghlAccounts = null
+  if (accountsCache) {
+    const now = Date.now()
+    ghlAccounts = accountsCache.map((a) => {
+      const expireMs = a.expire ? new Date(a.expire).getTime() : null
+      const daysUntilExpiry = expireMs ? Math.floor((expireMs - now) / 86400000) : null
+      return {
+        platform: GHL_PLATFORM_REVERSE[a.platform] || a.platform,
+        name: a.name,
+        isExpired: !!a.isExpired,
+        expire: a.expire || null,
+        daysUntilExpiry,
+      }
+    })
+  }
+
+  const allOk = anthropic.ok && ghl.ok && ghlLocation && ghlUser
+  const anyExpiredSoon =
+    ghlAccounts?.some((a) => a.isExpired || (a.daysUntilExpiry !== null && a.daysUntilExpiry <= 7)) || false
+
   res.json({
-    status: 'ok',
-    openai: !!process.env.OPENAI_API_KEY,
-    ghl: !!process.env.GHL_API_KEY,
-    ghlLocation: !!process.env.GHL_LOCATION_ID,
-    ghlUser: !!process.env.GHL_USER_ID,
+    status: allOk ? (anyExpiredSoon ? 'warning' : 'ok') : 'degraded',
+    anthropic,
+    ghl,
+    ghlLocation,
+    ghlUser,
+    ghlAccounts,
   })
 })
 
@@ -560,14 +630,14 @@ app.get('/api/health', (_req, res) => {
 // ---------------------------------------------------------------------------
 if (process.env.NODE_ENV === 'production') {
   app.use(express.static(join(__dirname, 'dist')))
-  app.get('*', (_req, res) => {
+  app.use((_req, res) => {
     res.sendFile(join(__dirname, 'dist', 'index.html'))
   })
 }
 
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`)
-  console.log(`  OpenAI key:      ${process.env.OPENAI_API_KEY ? '✓ configured' : '✗ MISSING'}`)
+  console.log(`  Anthropic key:   ${process.env.ANTHROPIC_API_KEY ? '✓ configured' : '✗ MISSING'}`)
   console.log(`  GHL API key:     ${process.env.GHL_API_KEY ? '✓ configured' : '✗ MISSING'}`)
   console.log(`  GHL Location ID: ${process.env.GHL_LOCATION_ID ? '✓ configured' : '✗ MISSING'}`)
   console.log(`  GHL User ID:     ${process.env.GHL_USER_ID ? '✓ configured' : '✗ MISSING'}`)

@@ -20,7 +20,7 @@ async function uploadImage(file: UploadedFile): Promise<string | null> {
   if (file.isVideo || !file.base64) return null
 
   try {
-    const res = await authFetch('/api/upload', {
+    const res = await fetchWithRetry('/api/upload', {
       method: 'POST',
       body: JSON.stringify({
         base64: file.base64,

@@ -41,7 +41,7 @@ export default function SystemPromptViewer() {
           </svg>
           <span className="text-sm font-medium text-text-secondary">Active System Prompt</span>
           <span className="text-[10px] px-2 py-0.5 rounded-full bg-accent/10 text-accent font-medium border border-accent/20">
-            GPT-4o Vision
+            Claude Sonnet 4.6
           </span>
         </div>
         <svg

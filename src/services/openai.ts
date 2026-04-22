@@ -18,7 +18,7 @@ import { getStaggeredSchedule } from '../utils/dateHelpers'
 
 /**
  * Calls our backend /api/generate endpoint.
- * The server holds the OpenAI key and proxies the request — nothing is exposed in the browser.
+ * The server holds the Anthropic key and proxies the request — nothing is exposed in the browser.
  */
 export async function generateCaptions(files: UploadedFile[], customPrompt?: string): Promise<CaptionData[]> {
   const imagesWithBase64 = files.filter((f) => !f.isVideo && f.base64)

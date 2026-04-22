@@ -1,102 +1,170 @@
-Here's the full updated picture:
+# RoofPost AI — System Design
 
-Updated System Architecture
+## Purpose
 
-┌─────────────────────────────────────────────────────────────────┐
-│                    BROWSER (RoofPost AI)                        │
-│                                                                 │
-│  1. Upload photo/video                                          │
-│  2. POST /api/generate  (base64 image)                         │
-│  3. See & edit 4 captions                                       │
-│  4. Click "Approve & Schedule"                                  │
-│     → POST /api/upload  (base64 image)                         │
-│     → POST Zapier webhook (caption + GHL image URL)            │
-└────────┬──────────────────────────┬────────────────────────────┘
-         │                          │ (no-cors, fire & forget)
-         ▼                          ▼
-┌─────────────────┐      ┌─────────────────────────────────────┐
-│  EXPRESS SERVER │      │         ZAPIER (×4 Zaps)            │
-│  :3001          │      │                                     │
-│                 │      │  Catch Hook trigger                 │
-│  /api/generate  │      │     → parse JSON payload            │
-│  → OpenAI GPT-4o│      │     → POST to GHL Social Planner   │
-│    Vision       │      │       API with:                     │
-│  → returns JSON │      │       - caption                     │
-│    captions     │      │       - schedule_date               │
-│                 │      │       - accountId (per platform)    │
-│  /api/upload    │      │       - media.url (GHL-hosted)      │
-│  → GHL Media    │      └──────────────┬──────────────────────┘
-│    Library API  │                     │
-│  → returns GHL  │                     ▼
-│    hosted URL   │      ┌─────────────────────────────────────┐
-│                 │      │     GoHighLevel Social Planner      │
-│  Holds all keys │      │                                     │
-│  (never in      │      │  Scheduled posts published to:      │
-│   browser)      │      │  Facebook · Instagram               │
-│                 │      │  LinkedIn · Google Business         │
-└─────────────────┘      └─────────────────────────────────────┘
-What's In Each Layer
-Browser — React + Vite SPA. No API keys. No secrets. Just UI logic.
+A single-operator web app that replaces a manual social media workflow. The owner of a roofing company uploads a photo of a completed job, and the app generates 4 platform-specific captions (Facebook, Instagram, LinkedIn, Google Business Profile), lets the owner review/edit them, then schedules all 4 posts directly to GoHighLevel's Social Planner in one click.
 
-Express Server — 3 endpoints, 1 file (server.js). Holds all keys server-side.
+**Design constraints:**
+- Single-operator — no multi-user concerns
+- British English, roofing-industry tone
+- Mobile-friendly (used from a phone on job sites once deployed)
+- Low running cost (~£10/mo target)
 
-Endpoint	Does
-POST /api/generate	Receives base64 images → calls GPT-4o Vision → returns 4 captions
-POST /api/upload	Receives base64 image → uploads to GHL Media Library → returns GHL URL
-GET /api/health	Reports which keys are configured
-Zapier (×4 Zaps) — One per platform. Each receives a webhook and calls GHL API. Not built yet.
+---
 
-GHL — Owns everything at the end: the media file and the scheduled social post.
+## Architecture
 
-Keys Required
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│                       BROWSER (React + Vite SPA)                     │
+│                                                                      │
+│  Login → Upload photo → Generate → Review/edit → Schedule            │
+│                                                                      │
+│  State:                                                              │
+│    • sessionStorage  roofpost_auth_token    (bearer token)           │
+│    • sessionStorage  roofpost_captions      (survives F5)            │
+│    • sessionStorage  roofpost_prompt        (custom instructions)    │
+└──────────────────────────────┬───────────────────────────────────────┘
+                               │  fetch /api/*
+                               │  Authorization: Bearer <uuid>
+                               ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│                     EXPRESS BACKEND (server.js)                      │
+│                                                                      │
+│  Holds ALL secrets — ANTHROPIC_API_KEY, GHL_API_KEY, APP_PASSWORD    │
+│                                                                      │
+│  Public:                                                             │
+│    POST /api/login            → issue UUID bearer token              │
+│    GET  /api/health           → env-var presence check               │
+│                                                                      │
+│  Authenticated (requireAuth middleware):                             │
+│    POST /api/generate         → Anthropic Claude Sonnet 4.6 vision   │
+│    POST /api/revise           → Anthropic Claude Sonnet 4.6 text     │
+│    POST /api/upload           → GHL Media Library (image hosting)    │
+│    POST /api/schedule         → GHL Social Planner (scheduled post)  │
+│    GET  /api/scheduled-posts  → GHL Social Planner (upcoming list)   │
+│                                                                      │
+│  Cross-cutting:                                                      │
+│    • Rate limit  /generate (10/min) /revise (20/min) /login (10/15m) │
+│    • CORS pin via ALLOWED_ORIGIN env var (open in dev)               │
+│    • trust proxy = 1 (so rate limiter sees real IPs behind Railway)  │
+└──────────┬───────────────────────────────────┬───────────────────────┘
+           │                                   │
+           ▼                                   ▼
+┌──────────────────────────┐      ┌───────────────────────────────────┐
+│  ANTHROPIC API           │      │  GOHIGHLEVEL API v2               │
+│  claude-sonnet-4-6       │      │  services.leadconnectorhq.com     │
+│                          │      │                                   │
+│  Vision + text gen       │      │  • /medias/upload-file            │
+│  British English,        │      │  • /social-media-posting/         │
+│  roofing-copywriter      │      │      {locationId}/accounts        │
+│  system prompt           │      │  • /social-media-posting/         │
+│                          │      │      {locationId}/posts           │
+│                          │      │  • /social-media-posting/         │
+│                          │      │      {locationId}/posts/list      │
+└──────────────────────────┘      └────────────────┬──────────────────┘
+                                                   │
+                                                   ▼
+                                  ┌───────────────────────────────────┐
+                                  │  Facebook · Instagram             │
+                                  │  LinkedIn · Google Business       │
+                                  │  (published by GHL on schedule)   │
+                                  └───────────────────────────────────┘
+```
 
-OPENAI_API_KEY     → AI captions (server only)
-GHL_API_KEY        → image upload + Zapier uses same key for posting
-GHL_LOCATION_ID    → which GHL sub-account
-Honest Feedback on the Current Design
-What's genuinely better now
-GHL Media Library is the right call. Your images live in your own GHL account, reusable, no third-party dependency. It also means the same API key does double duty — upload and post.
+---
 
-Keys are fully server-side. Nothing sensitive reaches the browser. The bundle is smaller too (OpenAI SDK was removed from the frontend).
+## Request flows
 
-The architecture is clean for a single-user tool. One server, one page, three external services. Easy to reason about.
+### Generate + schedule (happy path)
 
-Remaining problems — honest ones
-Problem 1: The GHL Media Library upload endpoint is unverified
+1. **Login** — `POST /api/login` with password → UUID token stored in `sessionStorage`
+2. **Upload** — user drops photo(s); frontend base64-encodes them in memory
+3. **Generate** — `POST /api/generate` with base64 images → server calls Claude Sonnet 4.6 vision → returns JSON with 4 platform captions
+4. **Review** — user edits any caption manually, or clicks revise ("make it shorter") → `POST /api/revise` → Claude returns a single revised caption
+5. **Schedule all** — for each platform:
+   - `POST /api/upload` → GHL Media Library returns a hosted URL (retried 2× on 5xx)
+   - `POST /api/schedule` with caption + UTC timestamp + image URL + platform → GHL returns a post ID (retried 2× on 5xx)
+6. **Confirmation** — frontend refreshes the "Scheduled Posts" panel from `GET /api/scheduled-posts` to verify the post landed in GHL
 
-I found the endpoint (POST /medias/upload-file) in the docs but could not read the full schema — GHL's API docs are behind authentication. The response structure I'm handling:
+### Timezone handling
 
+`datetime-local` inputs produce naive strings like `"2026-04-20T09:00"`. The frontend converts these to UTC with `new Date(dateStr).toISOString()` — the browser's Europe/London locale handles BST/GMT automatically. The server does no timezone logic; it passes the UTC ISO string straight to GHL.
 
-ghlData?.data?.url || ghlData?.url || ghlData?.fileUrl
-...is a best guess across three possible shapes. This will likely need adjustment once you test it against the real API. If it fails, the image silently won't attach. This needs a real test before relying on it.
+---
 
-Problem 2: Still no confirmation posts actually scheduled
+## Reliability primitives
 
-The Zapier webhook is still mode: 'no-cors' — fire and forget. The app shows green checkmarks regardless of what Zapier does. If your GHL token expires, a Zap is turned off, or an accountId is wrong, you'd never know from the app.
+| Concern | Mechanism | Location |
+|---|---|---|
+| Transient GHL 5xx | 2× retry, 500ms backoff | `fetchWithRetry` in [scheduler.ts](src/services/scheduler.ts) — applied to `/api/upload` and `/api/schedule` |
+| OpenAI/Anthropic cost runaway | In-memory per-IP rate limit | `createRateLimiter` in [server.js](server.js) |
+| Brute-force login | 10 attempts / 15 min | `loginLimiter` on `/api/login` |
+| Accidental F5 | sessionStorage mirror of captions + custom prompt | [App.tsx](src/App.tsx) |
+| Zombie "already scheduled" state after F5 | On restore, clear storage if every caption is `scheduled: true` | [App.tsx](src/App.tsx) init |
+| API-key misconfiguration | `/api/health` + green/red dot badge in header, polls every 30s | [useHealthCheck.ts](src/hooks/useHealthCheck.ts), [Header.tsx](src/components/layout/Header.tsx) |
+| Stolen token replay | UUID bearer tokens in sessionStorage (wiped on tab close), auto-logout on 401 | [auth.ts](src/services/auth.ts) |
 
-Problem 3: The 4 Zapier Zaps haven't been built yet
+---
 
-The app is functionally ready but nothing will actually post to social media until you set up the 4 Zaps in Zapier. Each one needs:
+## Data storage
 
-A Catch Hook trigger (gives you the webhook URL)
-A POST to GHL Social Planner API with correct locationId, accountIds[], summary, media, scheduleDate
-This is the most important remaining task — the app is wired up, Zapier is the missing piece.
+**None on the server** — deliberately. The only server-side state is in-memory:
 
-Problem 4: Server needs to be running for the app to work
+- `validTokens: Set<string>` — login tokens, lost on restart
+- `accountsCache` — GHL social account list, 5-minute TTL
+- Rate-limit counters (Map per IP)
 
-Right now you run it locally with npm run dev. If you close your laptop, the app stops working. For it to work reliably from your phone on a job site, the server needs to be hosted somewhere permanently.
+Consequence: every server restart logs every user out mid-flow. For a single-operator tool this is acceptable (HANDOFF.md notes the tradeoff). The day this needs fixing is the day SQLite gets added — at which point an audit log of scheduled posts should go in the same DB.
 
-Cheapest options:
+**Frontend state:** session-scoped only. Photos never persist across F5 (browser `File` objects aren't serialisable) — captions and custom prompt do.
 
-Railway — free tier, push to deploy, stays running
-Render — free tier, slight cold-start delay
-Your own VPS — if you already have one
+---
 
-Priority Order from Here
-#	Task	Effort	Blocks
-1	Build the 4 Zapier Zaps	~1 hour in Zapier UI	Nothing posts without this
-2	Test GHL Media Library upload	10 minutes	Images may not attach
-3	Deploy server permanently	30 minutes	App only works on your machine right now
-4	Add scheduling confirmation	Medium	You're blind to failures
-5	Add password gate	Small	Anyone with URL can use it
-The single most impactful next step is building the Zapier Zaps. Want me to write out the exact step-by-step configuration for all 4?
+## Trust boundaries
+
+```
+Browser (untrusted)
+  │    bearer token, base64 images, user-edited captions
+  ▼
+Express (trusted — holds every secret)
+  │    authenticated API calls with real keys
+  ▼
+Anthropic + GHL (external, trusted per their own SLAs)
+```
+
+- No key ever reaches the browser
+- `requireAuth` middleware on every write endpoint — `/api/health` is the only public authenticated-adjacent endpoint, and it only exposes "is key configured" booleans, never the keys themselves
+- `APP_PASSWORD` protects the app from the open internet
+- `ALLOWED_ORIGIN` pins CORS in production
+
+---
+
+## What's deliberately not built
+
+- **Multi-user auth** — single-operator tool
+- **Persistent token store** — in-memory is fine for one user; tolerating post-deploy re-login is cheaper than running a database
+- **Observability stack (Sentry, DataDog)** — server console + GHL's own audit UI covers current scale
+- **OpenAI-compatibility shim / model-agnostic layer** — provider switching in the past has been a single-file diff; abstracting is overkill
+- **Video support** — acknowledged gap (HANDOFF.md problem 6); videos generate captions but don't attach media
+
+---
+
+## Deployment
+
+Not yet deployed — runs via `npm run dev` on the owner's laptop today. Target is Railway Hobby (~$5/mo) with a custom subdomain. The full runbook is in [DEPLOY-RAILWAY.md](Source%20of%20Truth/DEPLOY-RAILWAY.md).
+
+**Required env vars:** `ANTHROPIC_API_KEY`, `GHL_API_KEY`, `GHL_LOCATION_ID`, `GHL_USER_ID`, `APP_PASSWORD`, `NODE_ENV=production`, `ALLOWED_ORIGIN`.
+
+---
+
+## Known weaknesses (for follow-up)
+
+In priority order, honest assessment:
+
+1. **No audit log** — if GHL silently drops a post in 3 weeks there's no app-side record to reconcile against. Single-file SQLite log would fix it and also solve persistent tokens.
+2. **No GHL token-expiry signal** — the PIT can be revoked server-side; the health badge only checks env var presence, not validity. A "last successful GHL call" timestamp in `/api/health` would catch this.
+3. **Video media not attached to scheduled posts** — text-only posts succeed; IG will reject.
+4. **In-memory rate limiter** — fine for current scale, but doesn't work across replicas if scale-out ever happens.
+
+None of these block single-operator production use. All can be layered in without architectural change.

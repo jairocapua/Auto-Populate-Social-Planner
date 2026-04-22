@@ -83,11 +83,11 @@ export default function App() {
   const handleGenerate = useCallback(async () => {
     if (files.length === 0) return
     const result = await generate(files, customPrompt)
-    if (result) {
-      setCaptions(result)
+    if (result.ok) {
+      setCaptions(result.captions)
       addToast('success', 'Captions generated for all 4 platforms!')
     } else {
-      addToast('error', 'Failed to generate captions. Please try again.')
+      addToast('error', result.error)
     }
   }, [files, generate, customPrompt, addToast])
 
@@ -116,7 +116,7 @@ export default function App() {
         addToast('success', `${caption.platform} post scheduled!`)
         refreshScheduled()
       } else if (result.error === 'upload_failed') {
-        addToast('error', `Failed to upload image for ${caption.platform}.`)
+        addToast('error', `Failed to upload image for ${caption.platform}: ${result.details || 'GHL Media Library rejected the upload'}`)
       } else {
         addToast('error', `Failed to schedule ${caption.platform}: ${result.details || 'GHL rejected the post'}`)
       }

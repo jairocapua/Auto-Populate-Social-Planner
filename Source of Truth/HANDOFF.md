@@ -1,7 +1,7 @@
 # RoofPost AI — Handoff Briefing
 
 ## TL;DR for the boss
-> We built an internal tool that replaces 4 Zapier Zaps with a single React + Node app. Roofing photos go in → GPT-4o writes platform-specific captions in British English → the owner edits them → direct API calls to GoHighLevel Social Planner schedule all 4 posts. Running on a laptop today; needs ~2–4 hours of deployment work to run permanently from any device.
+> We built an internal tool that replaces 4 Zapier Zaps with a single React + Node app. Roofing photos go in → Claude Sonnet 4.6 writes platform-specific captions in British English → the owner edits them → direct API calls to GoHighLevel Social Planner schedule all 4 posts. Running on a laptop today; needs ~2–4 hours of deployment work to run permanently from any device.
 
 ---
 
@@ -64,7 +64,7 @@
 
 ---
 
-### 4. ~~No OpenAI rate-limit~~ ✅ DONE (2026-04-20)
+### 4. ~~No AI rate-limit~~ ✅ DONE (2026-04-20)
 **Shipped:** Zero-dependency rate limiter built directly into `server.js`.
 - `/api/generate` — 10 requests/min per IP
 - `/api/revise` — 20 requests/min per IP
@@ -130,12 +130,12 @@
 
 | Item | Current (local) | If deployed |
 |---|---|---|
-| OpenAI GPT-4o | ~$3–5/mo (light use) | Capped at ~$20/mo with rate-limiting |
+| Claude Sonnet 4.6 | ~$4–6/mo (light use) | Capped at ~$25/mo with rate-limiting |
 | GHL | $0 extra (included in existing plan) | $0 extra |
 | Hosting | $0 (local) | $5/mo (Railway) or $0 (Render free tier) |
 | **Total** | **~$3–5/mo** | **~$10–25/mo** |
 
-Compare to **previous design** ($20 Zapier tier + $3–5 OpenAI = ~$25/mo minimum). The new architecture is cheaper, faster, and more reliable.
+Compare to **previous design** ($20 Zapier tier + $3–5 OpenAI = ~$25/mo minimum). The new architecture is cheaper, faster, and more reliable, and now runs on Claude Sonnet 4.6 for higher-quality captions.
 
 ---
 
@@ -162,15 +162,15 @@ Browser (React + Vite SPA)
 Express Backend (localhost:3001 — holds all API keys)
   ├─ /api/health    → env var check (public, no auth)
   ├─ /api/login     → issues bearer token
-  ├─ /api/generate  → OpenAI GPT-4o Vision
-  ├─ /api/revise    → OpenAI GPT-4o
+  ├─ /api/generate  → Anthropic Claude Sonnet 4.6 (vision)
+  ├─ /api/revise    → Anthropic Claude Sonnet 4.6
   ├─ /api/upload    → GHL Media Library
   ├─ /api/schedule  → GHL Social Planner (with 2× retry on 5xx)
   └─ /api/scheduled-posts → GHL Social Planner (read)
 ```
 
-**Tech stack:** React 19, TypeScript, Vite, Tailwind v4, Express, Node 22, OpenAI SDK, GoHighLevel API v2.
+**Tech stack:** React 19, TypeScript, Vite, Tailwind v4, Express, Node 22, Anthropic SDK (`@anthropic-ai/sdk`), GoHighLevel API v2.
 
-**Required env vars:** `OPENAI_API_KEY`, `GHL_API_KEY` (PIT), `GHL_LOCATION_ID`, `GHL_USER_ID`, `APP_PASSWORD`.
+**Required env vars:** `ANTHROPIC_API_KEY`, `GHL_API_KEY` (PIT), `GHL_LOCATION_ID`, `GHL_USER_ID`, `APP_PASSWORD`.
 
 **PIT scopes required:** `medias.write`, `medias.readonly`, `socialplanner/account.readonly`, `socialplanner/post.readonly`, `socialplanner/post.write`.
