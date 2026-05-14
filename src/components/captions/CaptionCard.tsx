@@ -10,7 +10,7 @@ interface CaptionCardProps {
   data: CaptionData
   config: PlatformConfig
   animationDelay: number
-  imagePreview?: string
+  imagePreviews: string[]
   onCaptionChange: (caption: string) => void
   onDateChange: (date: string) => void
   onSchedule: () => void
@@ -20,7 +20,7 @@ export default function CaptionCard({
   data,
   config,
   animationDelay,
-  imagePreview,
+  imagePreviews,
   onCaptionChange,
   onDateChange,
   onSchedule,
@@ -96,7 +96,7 @@ export default function CaptionCard({
           <PostMockup
             platform={data.platform}
             caption={data.caption}
-            imagePreview={imagePreview}
+            imagePreviews={imagePreviews}
           />
         </div>
       )}

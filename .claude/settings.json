@@ -55,7 +55,16 @@
       "Bash(taskkill //F //PID 9544 //PID 51048)",
       "Bash(awk '{print $5}')",
       "Bash(grep -v '^0$')",
-      "mcp__claude_ai_Context7__resolve-library-id"
+      "mcp__claude_ai_Context7__resolve-library-id",
+      "Bash(PORT=3099 NODE_ENV=production node server.js)",
+      "Bash(curl -s -o /dev/null -w \"health: %{http_code}\\\\n\" http://localhost:3099/api/health)",
+      "Bash(curl -s -o /dev/null -w \"root: %{http_code}\\\\n\" http://localhost:3099/)",
+      "Bash(curl -s -o /dev/null -w \"spa-route: %{http_code}\\\\n\" http://localhost:3099/some/deep/spa/path)",
+      "Bash(curl -s http://localhost:3099/api/health)",
+      "Skill(claude-api)",
+      "Skill(claude-api:*)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
     ],
     "additionalDirectories": [
       "\\tmp"

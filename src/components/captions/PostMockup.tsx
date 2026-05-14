@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import type { Platform } from '../../types'
 
 const BUSINESS_NAME = 'The Family Roofing Company'
@@ -6,7 +7,7 @@ const IG_HANDLE = 'thefamilyroofingco'
 
 interface MockupProps {
   caption: string
-  imagePreview?: string
+  imagePreviews: string[]
 }
 
 interface PostMockupProps extends MockupProps {
@@ -66,7 +67,68 @@ const ImagePlaceholder = () => (
   </div>
 )
 
-function InstagramMockup({ caption, imagePreview }: MockupProps) {
+function MediaCarousel({ images, aspectRatio }: { images: string[]; aspectRatio: string }) {
+  const [index, setIndex] = useState(0)
+  const safeIndex = Math.min(index, Math.max(0, images.length - 1))
+
+  if (images.length === 0) {
+    return (
+      <div className="bg-gray-100 overflow-hidden" style={{ aspectRatio }}>
+        <ImagePlaceholder />
+      </div>
+    )
+  }
+
+  return (
+    <div className="bg-gray-100 overflow-hidden relative" style={{ aspectRatio }}>
+      <img src={images[safeIndex]} alt={`Post ${safeIndex + 1}`} className="w-full h-full object-cover" />
+
+      {images.length > 1 && (
+        <>
+          {safeIndex > 0 && (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); setIndex(safeIndex - 1) }}
+              className="absolute left-2 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-white/85 hover:bg-white shadow flex items-center justify-center text-gray-800 transition-colors"
+              aria-label="Previous image"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="15 18 9 12 15 6" />
+              </svg>
+            </button>
+          )}
+          {safeIndex < images.length - 1 && (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); setIndex(safeIndex + 1) }}
+              className="absolute right-2 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-white/85 hover:bg-white shadow flex items-center justify-center text-gray-800 transition-colors"
+              aria-label="Next image"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="9 18 15 12 9 6" />
+              </svg>
+            </button>
+          )}
+
+          <div className="absolute top-2 right-2 px-2 py-0.5 rounded-full bg-black/60 text-white text-[10px] font-semibold leading-none">
+            {safeIndex + 1}/{images.length}
+          </div>
+
+          <div className="absolute bottom-2 left-0 right-0 flex justify-center gap-1 pointer-events-none">
+            {images.map((_, i) => (
+              <span
+                key={i}
+                className={`w-1.5 h-1.5 rounded-full transition-colors ${i === safeIndex ? 'bg-white' : 'bg-white/50'}`}
+              />
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+function InstagramMockup({ caption, imagePreviews }: MockupProps) {
   return (
     <div className="bg-white text-gray-900 font-sans select-none">
       <div className="flex items-center justify-between px-3 py-2.5">
@@ -82,11 +144,7 @@ function InstagramMockup({ caption, imagePreview }: MockupProps) {
         <span className="text-gray-400 text-lg font-bold tracking-widest leading-none">···</span>
       </div>
 
-      <div className="bg-gray-100 overflow-hidden" style={{ aspectRatio: '1/1' }}>
-        {imagePreview
-          ? <img src={imagePreview} alt="Post" className="w-full h-full object-cover" />
-          : <ImagePlaceholder />}
-      </div>
+      <MediaCarousel images={imagePreviews} aspectRatio="1/1" />
 
       <div className="px-3 pt-2.5 pb-1 flex items-center justify-between text-gray-800">
         <div className="flex items-center gap-4">
@@ -112,7 +170,7 @@ function InstagramMockup({ caption, imagePreview }: MockupProps) {
   )
 }
 
-function FacebookMockup({ caption, imagePreview }: MockupProps) {
+function FacebookMockup({ caption, imagePreviews }: MockupProps) {
   return (
     <div className="bg-white text-gray-900 font-sans select-none">
       <div className="flex items-center gap-2.5 px-3 py-2.5">
@@ -134,11 +192,7 @@ function FacebookMockup({ caption, imagePreview }: MockupProps) {
         <p className="text-[13px] text-gray-800 leading-snug whitespace-pre-wrap">{caption}</p>
       </div>
 
-      <div className="bg-gray-100 overflow-hidden" style={{ aspectRatio: '16/9' }}>
-        {imagePreview
-          ? <img src={imagePreview} alt="Post" className="w-full h-full object-cover" />
-          : <ImagePlaceholder />}
-      </div>
+      <MediaCarousel images={imagePreviews} aspectRatio="16/9" />
 
       <div className="px-3 py-1.5 flex items-center justify-between text-[12px] text-gray-500 border-b border-gray-100">
         <div className="flex items-center gap-1">
@@ -167,7 +221,7 @@ function FacebookMockup({ caption, imagePreview }: MockupProps) {
   )
 }
 
-function LinkedInMockup({ caption, imagePreview }: MockupProps) {
+function LinkedInMockup({ caption, imagePreviews }: MockupProps) {
   return (
     <div className="bg-white text-gray-900 font-sans select-none">
       <div className="flex items-start gap-2.5 px-3 py-3">
@@ -195,11 +249,7 @@ function LinkedInMockup({ caption, imagePreview }: MockupProps) {
         <p className="text-[13px] text-gray-800 leading-relaxed whitespace-pre-wrap">{caption}</p>
       </div>
 
-      <div className="bg-gray-100 overflow-hidden" style={{ aspectRatio: '16/9' }}>
-        {imagePreview
-          ? <img src={imagePreview} alt="Post" className="w-full h-full object-cover" />
-          : <ImagePlaceholder />}
-      </div>
+      <MediaCarousel images={imagePreviews} aspectRatio="16/9" />
 
       <div className="px-3 py-1.5 flex items-center justify-between text-[11px] text-gray-500 border-b border-gray-100">
         <div className="flex items-center gap-1">
@@ -227,7 +277,7 @@ function LinkedInMockup({ caption, imagePreview }: MockupProps) {
   )
 }
 
-function GoogleBusinessMockup({ caption, imagePreview }: MockupProps) {
+function GoogleBusinessMockup({ caption, imagePreviews }: MockupProps) {
   return (
     <div className="bg-white text-gray-900 font-sans select-none">
       <div className="flex items-center gap-2.5 px-3 py-2.5 border-b border-gray-100">
@@ -243,11 +293,7 @@ function GoogleBusinessMockup({ caption, imagePreview }: MockupProps) {
         </div>
       </div>
 
-      <div className="bg-gray-100 overflow-hidden" style={{ aspectRatio: '4/3' }}>
-        {imagePreview
-          ? <img src={imagePreview} alt="Post" className="w-full h-full object-cover" />
-          : <ImagePlaceholder />}
-      </div>
+      <MediaCarousel images={imagePreviews} aspectRatio="4/3" />
 
       <div className="px-3 pt-2.5 pb-1">
         <p className="text-[10px] font-semibold text-gray-400 tracking-wider mb-1">WHAT'S NEW</p>
@@ -270,11 +316,11 @@ const MOCKUP_MAP: Record<Platform, React.ComponentType<MockupProps>> = {
   google_business: GoogleBusinessMockup,
 }
 
-export default function PostMockup({ platform, caption, imagePreview }: PostMockupProps) {
+export default function PostMockup({ platform, caption, imagePreviews }: PostMockupProps) {
   const Component = MOCKUP_MAP[platform]
   return (
     <div className="rounded-xl overflow-hidden border border-gray-200 shadow-sm">
-      <Component caption={caption} imagePreview={imagePreview} />
+      <Component caption={caption} imagePreviews={imagePreviews} />
     </div>
   )
 }

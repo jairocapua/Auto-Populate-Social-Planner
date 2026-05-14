@@ -20,7 +20,7 @@ export default function CaptionCardGrid({
   onDateChange,
   onSchedule,
 }: CaptionCardGridProps) {
-  const imagePreview = files.find((f) => !f.isVideo)?.preview
+  const imagePreviews = files.filter((f) => !f.isVideo).map((f) => f.preview)
   if (isGenerating) {
     return (
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -58,7 +58,7 @@ export default function CaptionCardGrid({
             data={caption}
             config={config}
             animationDelay={index * 70}
-            imagePreview={imagePreview}
+            imagePreviews={imagePreviews}
             onCaptionChange={(text) => onCaptionChange(index, text)}
             onDateChange={(date) => onDateChange(index, date)}
             onSchedule={() => onSchedule(index)}
