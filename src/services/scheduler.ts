@@ -42,15 +42,18 @@ export async function schedulePost(
   caption: CaptionData,
   files: UploadedFile[]
 ): Promise<ScheduleResult> {
-  const firstFile = files[0]
+  const imageFiles = files.filter((f) => !f.isVideo && f.base64)
 
-  let imageUrl: string | null = null
-  let imageType: string | undefined
-  if (firstFile && !firstFile.isVideo) {
-    imageUrl = await uploadImage(firstFile)
-    if (!imageUrl) return { ok: false, error: 'upload_failed' }
-    imageType = firstFile.mediaType
+  const uploads = await Promise.all(
+    imageFiles.map(async (f) => {
+      const url = await uploadImage(f)
+      return url ? { url, type: f.mediaType } : null
+    })
+  )
+  if (uploads.some((u) => u === null)) {
+    return { ok: false, error: 'upload_failed' }
   }
+  const media = uploads.filter((u): u is { url: string; type: string } => u !== null)
 
   try {
     const res = await fetchWithRetry('/api/schedule', {
@@ -59,8 +62,7 @@ export async function schedulePost(
         platform: caption.platform,
         caption: caption.caption,
         scheduleDate: new Date(caption.scheduleDate).toISOString(),
-        imageUrl,
-        imageType,
+        media,
       }),
     })
     const data = await res.json().catch(() => ({}))
@@ -75,12 +77,22 @@ export async function schedulePost(
   }
 }
 
-export async function fetchScheduledPosts(): Promise<ScheduledPost[]> {
+export interface PartialFetchInfo {
+  failedAccounts: number
+  totalAccounts: number
+}
+
+export interface ScheduledPostsResult {
+  posts: ScheduledPost[]
+  partial: PartialFetchInfo | null
+}
+
+export async function fetchScheduledPosts(): Promise<ScheduledPostsResult> {
   const res = await authFetch('/api/scheduled-posts', { method: 'GET' })
   if (!res.ok) {
     const data = await res.json().catch(() => ({}))
     throw new Error((data as { error?: string }).error || `Request failed (${res.status})`)
   }
-  const data = (await res.json()) as { posts: ScheduledPost[] }
-  return data.posts
+  const data = (await res.json()) as { posts: ScheduledPost[]; partial: PartialFetchInfo | null }
+  return { posts: data.posts, partial: data.partial ?? null }
 }

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { Platform, ScheduledPost } from '../../types'
+import type { PartialFetchInfo } from '../../services/scheduler'
 import { PLATFORM_MAP } from '../../constants/platforms'
 import { cn } from '../../utils/cn'
 import Spinner from '../ui/Spinner'
@@ -8,6 +9,7 @@ interface ScheduledPostsPanelProps {
   posts: ScheduledPost[]
   isLoading: boolean
   error: string | null
+  partial: PartialFetchInfo | null
   onRefresh: () => void
 }
 
@@ -69,6 +71,7 @@ export default function ScheduledPostsPanel({
   posts,
   isLoading,
   error,
+  partial,
   onRefresh,
 }: ScheduledPostsPanelProps) {
   const [open, setOpen] = useState(false)
@@ -140,6 +143,19 @@ export default function ScheduledPostsPanel({
 
       {open && (
         <div className="border-t border-border">
+          {partial && !error && (
+            <div className="px-4 py-2 text-xs text-text-secondary bg-accent/5 border-b border-border flex items-center justify-between gap-3">
+              <span>
+                {partial.failedAccounts} of {partial.totalAccounts} accounts didn't respond (GHL timeout). List may be incomplete.
+              </span>
+              <button
+                onClick={onRefresh}
+                className="px-2 py-0.5 rounded-md text-xs font-medium border border-border text-text-secondary hover:bg-border/40 transition-colors"
+              >
+                Retry
+              </button>
+            </div>
+          )}
           {error ? (
             <div className="px-4 py-4 text-sm text-error flex items-center justify-between gap-3">
               <span>{error}</span>

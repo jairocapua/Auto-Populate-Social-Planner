@@ -42,6 +42,7 @@ export default function App() {
     posts: scheduledPosts,
     isLoading: isLoadingScheduled,
     error: scheduledError,
+    partial: scheduledPartial,
     refresh: refreshScheduled,
   } = useScheduledPosts()
 
@@ -160,6 +161,7 @@ export default function App() {
           posts={scheduledPosts}
           isLoading={isLoadingScheduled}
           error={scheduledError}
+          partial={scheduledPartial}
           onRefresh={refreshScheduled}
         />
 

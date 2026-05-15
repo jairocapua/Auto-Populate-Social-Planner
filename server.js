@@ -378,7 +378,8 @@ async function getSocialAccounts() {
 
 app.post('/api/schedule', requireAuth, async (req, res) => {
   try {
-    const { platform, caption, scheduleDate, imageUrl, imageType } = req.body
+    const { platform, caption, scheduleDate, media } = req.body
+    const mediaArray = Array.isArray(media) ? media.filter((m) => m && m.url) : []
 
     const ghlApiKey = process.env.GHL_API_KEY
     const ghlLocationId = process.env.GHL_LOCATION_ID
@@ -407,8 +408,13 @@ app.post('/api/schedule', requireAuth, async (req, res) => {
       summary: caption,
       scheduleDate: new Date(scheduleDate).toISOString(),
       userId: ghlUserId,
-      media: imageUrl ? [{ url: imageUrl, type: imageType || 'image/jpeg' }] : [],
+      media: mediaArray.map((m) => ({ url: m.url, type: m.type || 'image/jpeg' })),
     }
+
+    console.log(
+      `GHL schedule request for ${platform}: media count=${body.media.length}, body=`,
+      JSON.stringify(body)
+    )
 
     const ghlRes = await fetch(
       `https://services.leadconnectorhq.com/social-media-posting/${ghlLocationId}/posts`,
@@ -424,6 +430,7 @@ app.post('/api/schedule', requireAuth, async (req, res) => {
     )
 
     const respText = await ghlRes.text()
+    console.log(`GHL schedule response for ${platform} (${ghlRes.status}):`, respText)
     if (!ghlRes.ok) {
       markError('ghl', new Error(`schedule ${ghlRes.status}: ${respText}`))
       console.error('GHL schedule error:', ghlRes.status, respText)
@@ -433,8 +440,33 @@ app.post('/api/schedule', requireAuth, async (req, res) => {
       })
     }
 
-    const respData = JSON.parse(respText)
-    const postId = respData?.post?._id || respData?.results?._id || respData?._id
+    let respData
+    try {
+      respData = JSON.parse(respText)
+    } catch {
+      markError('ghl', new Error(`schedule returned non-JSON body: ${respText}`))
+      return res.status(502).json({
+        error: 'GHL returned an unparseable response',
+        details: respText,
+      })
+    }
+
+    const postId =
+      respData?.results?.post?._id ||
+      respData?.post?._id ||
+      respData?.results?._id ||
+      respData?._id
+    if (!postId) {
+      // 2xx without a postId means GHL didn't actually create the post (e.g.,
+      // account-level validation rejected it silently). Treat as failure.
+      markError('ghl', new Error(`schedule returned 2xx with no postId: ${respText}`))
+      console.error('GHL schedule succeeded HTTP but returned no postId:', respText)
+      return res.status(502).json({
+        error: 'GHL accepted the request but did not return a post id',
+        details: respText,
+      })
+    }
+
     markSuccess('ghl')
     res.json({ ok: true, postId })
   } catch (err) {
@@ -475,19 +507,27 @@ app.get('/api/scheduled-posts', requireAuth, async (_req, res) => {
         fromDate: new Date(now).toISOString(),
         toDate: new Date(now + thirtyDays).toISOString(),
       }
-      const r = await fetch(
-        `https://services.leadconnectorhq.com/social-media-posting/${ghlLocationId}/posts/list`,
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${ghlApiKey}`,
-            Version: '2021-07-28',
-            'Content-Type': 'application/json',
-            Accept: 'application/json',
-          },
-          body: JSON.stringify(body),
-        }
-      )
+      // GHL occasionally returns 401 "Command timed out" or 5xx on this endpoint
+      // when their command processor stalls. Retry once before giving up.
+      const attempt = async () =>
+        fetch(
+          `https://services.leadconnectorhq.com/social-media-posting/${ghlLocationId}/posts/list`,
+          {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${ghlApiKey}`,
+              Version: '2021-07-28',
+              'Content-Type': 'application/json',
+              Accept: 'application/json',
+            },
+            body: JSON.stringify(body),
+          }
+        )
+      let r = await attempt()
+      if (!r.ok && (r.status === 401 || r.status >= 500)) {
+        await new Promise((res) => setTimeout(res, 500))
+        r = await attempt()
+      }
       const txt = await r.text()
       if (!r.ok) {
         console.error(`GHL list-posts error for ${accountId}:`, r.status, txt)
@@ -500,16 +540,22 @@ app.get('/api/scheduled-posts', requireAuth, async (_req, res) => {
     const results = await Promise.all(
       accountIds.map(async (id) => ({ accountId: id, ...(await fetchForAccount(id)) }))
     )
-    const firstError = results.find((r) => !r.ok)
-    if (firstError) {
-      return res.status(firstError.status).json({
-        error: `GHL rejected list request (${firstError.status})`,
-        details: firstError.details,
+
+    const failures = results.filter((r) => !r.ok)
+    const successes = results.filter((r) => r.ok)
+
+    // If every account failed, surface the error — otherwise return a partial
+    // list so a single flaky GHL account doesn't hide the user's other posts.
+    if (successes.length === 0 && failures.length > 0) {
+      const first = failures[0]
+      return res.status(first.status || 502).json({
+        error: `GHL rejected list request (${first.status})`,
+        details: first.details,
       })
     }
 
     // Tag each post with the accountId we queried for, so we can derive the platform
-    const rawPosts = results.flatMap((r) =>
+    const rawPosts = successes.flatMap((r) =>
       r.posts.map((p) => ({ ...p, _queriedAccountId: r.accountId }))
     )
 
@@ -567,8 +613,13 @@ app.get('/api/scheduled-posts', requireAuth, async (_req, res) => {
       .filter((p) => p.scheduleDate && p.platforms.length)
       .sort((a, b) => new Date(a.scheduleDate) - new Date(b.scheduleDate))
 
-    markSuccess('ghl')
-    res.json({ posts })
+    if (failures.length === 0) markSuccess('ghl')
+    res.json({
+      posts,
+      partial: failures.length > 0
+        ? { failedAccounts: failures.length, totalAccounts: results.length }
+        : null,
+    })
   } catch (err) {
     markError('ghl', err)
     console.error('Scheduled posts error:', err.message)

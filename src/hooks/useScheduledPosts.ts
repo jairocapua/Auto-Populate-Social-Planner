@@ -1,11 +1,12 @@
 import { useState, useCallback, useEffect } from 'react'
 import type { ScheduledPost } from '../types'
-import { fetchScheduledPosts } from '../services/scheduler'
+import { fetchScheduledPosts, type PartialFetchInfo } from '../services/scheduler'
 
 export function useScheduledPosts() {
   const [posts, setPosts] = useState<ScheduledPost[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [partial, setPartial] = useState<PartialFetchInfo | null>(null)
   const [lastFetched, setLastFetched] = useState<Date | null>(null)
 
   const refresh = useCallback(async () => {
@@ -13,7 +14,8 @@ export function useScheduledPosts() {
     setError(null)
     try {
       const result = await fetchScheduledPosts()
-      setPosts(result)
+      setPosts(result.posts)
+      setPartial(result.partial)
       setLastFetched(new Date())
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load scheduled posts')
@@ -26,5 +28,5 @@ export function useScheduledPosts() {
     refresh()
   }, [refresh])
 
-  return { posts, isLoading, error, lastFetched, refresh }
+  return { posts, isLoading, error, partial, lastFetched, refresh }
 }
